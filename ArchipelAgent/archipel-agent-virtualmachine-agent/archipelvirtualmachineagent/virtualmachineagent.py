@@ -20,6 +20,9 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 import xmpp
+import re
+import hashlib
+import sqlite3
 from archipelcore.archipelPlugin import TNArchipelPlugin
 from archipelcore.utils import build_error_iq
 
@@ -43,7 +46,17 @@ class TNVirtualMachineAgent(TNArchipelPlugin):
         @param entry_point_group: the group name of plugin entry_point
         """
         TNArchipelPlugin.__init__(self, configuration=configuration, entity=entity, entry_point_group=entry_point_group)
+        self.idSequence = 0
+        self.requestsPair = {}
         self.entity.add_vm_definition_hook(self.add_net_switch_to_definition)
+
+        # make sqlite connection
+        self.database = sqlite3.connect(self.configuration.get("VIRTUALMACHINEGUESTAGENT", "database"), check_same_thread=False)
+        self.cursor = self.database.cursor()
+        # create table for storing values of provisioning
+        self.cursor.execute("create table if not exists \
+            provisioning (id string primary key, value string)")
+        self.database.commit()
 
     @staticmethod
     def plugin_info():
@@ -54,8 +67,8 @@ class TNVirtualMachineAgent(TNArchipelPlugin):
         """
         return {    "common-name"               : "Virtual Machine Agent",
                     "identifier"                : "virtualmachineguestagent",
-                    "configuration-section"     : None,
-                    "configuration-tokens"      : []}
+                    "configuration-section"     : "VIRTUALMACHINEGUESTAGENT",
+                    "configuration-tokens"      : ["database"]}
 
     def register_handlers(self):
         """
@@ -85,7 +98,7 @@ class TNVirtualMachineAgent(TNArchipelPlugin):
         """
         to = xmpp.JID(self.entity.uuid+'-agent@'+self.entity.jid.getDomain()+'/guestagent')
         iq = xmpp.protocol.Iq(typ='get', to=to)
-        iq.setQueryNS(ARCHIPEL_NS_GUEST_CONTROL);
+        iq.setQueryNS(ARCHIPEL_NS_GUEST_CONTROL)
         query = iq.getTag("query");
         archipel = query.addChild('archipel', attrs={
             "executor": executor,
@@ -105,41 +118,37 @@ class TNVirtualMachineAgent(TNArchipelPlugin):
         """
         shouldBeAdded = False
         name = xmldesc.getTag('name').getData()
-        hostname = 'user,hostname=%s.%s' % (name, self.entity.jid.getDomain())
+        hostname = 'user,hostname=%s.%s,dns=10.0.2.2' % (name, self.entity.jid.getDomain())
         # check if we already have added switch
-        commandline = xmldesc.getTag('commandline', namespace='qemu')
+        commandline = xmldesc.getTag('commandline')
         if commandline == None:
             # add commandline tag, if we don't have any
             shouldBeAdded = True
-            commandline = xmldesc.addChild(name='qemu:commandline', attrs={
-                "xmlns:qemu": 'http://libvirt.org/schemas/domain/qemu/1.0'})
-        else:
-            # if we have commandline tag, check for args to be like:
-            # 0: -net
-            # 1: nic,model=virtio,addr=0xf,macaddr=92:42:ce:df:64:61
-            # 2: -net
-            # 3: user,hostname=...
-            hasSwitches = 0
-            for arg in commandline.getTags('arg', namespace='qemu'):
-                if arg.getAttr('value') == '-net' and (hasSwitches == 0 or hasSwitches == 2):
-                    hasSwitches += 1
-                    continue
-                if hasSwitches == 1:
-                    if arg.getAttr('value')=='nic,model=virtio,addr=0xf,macaddr=92:42:ce:df:64:61':
-                        hasSwitches += 1
-                        continue
-                if hasSwitches == 3:
-                    if arg.getAttr('value')==hostname:
-                        hasSwitches += 1
-                        break
-                hasSwitches = 0
-            if hasSwitches < 4:
-                shouldBeAdded = True
+            commandline = xmldesc.addChild(name='commandline', namespace='http://libvirt.org/schemas/domain/qemu/1.0')
+
+        # FIXME, after else we need to update hostname
+        # else:
+        #     # if we have commandline tag, check for args to be like:
+        #     # 0: -net
+        #     # 1: nic,model=virtio,addr=0xf,macaddr=92:42:ce:df:64:61
+        #     # 2: -net
+        #     # 3: user,hostname=...
+
+        #     try:
+        #         commandline.delChild(name='arg', attrs={'value': '-net'})
+        #         commandline.delChild(name='arg', attrs={'value': 'nic,model=virtio,addr=0xf,macaddr=92:42:ce:df:64:61'})
+        #         commandline.delChild(name='arg', attrs={'value': '-net'})
+        #         commandline.delChild(name='arg', attrs={'value': hostname })
+        #     except:
+        #         raise
+
+
         if shouldBeAdded:
-            commandline.addChild(name='qemu:arg', attrs={'value': '-net'})
-            commandline.addChild(name='qemu:arg', attrs={'value': 'nic,model=virtio,addr=0xf,macaddr=92:42:ce:df:64:61'})
-            commandline.addChild(name='qemu:arg', attrs={'value': '-net'})
-            commandline.addChild(name='qemu:arg', attrs={'value': hostname })
+
+            commandline.addChild(name='arg', attrs={'value': '-net'})
+            commandline.addChild(name='arg', attrs={'value': 'nic,model=virtio,addr=0xf,macaddr=92:42:ce:df:64:61'})
+            commandline.addChild(name='arg', attrs={'value': '-net'})
+            commandline.addChild(name='arg', attrs={'value': hostname })
         return xmldesc
 
     def process_iq(self, conn, iq):
@@ -155,6 +164,8 @@ class TNVirtualMachineAgent(TNArchipelPlugin):
 
         if action == "exec":
             reply = self.iq_exec(iq)
+        if action == "provisioning":
+            reply = self.iq_provisioning(iq)
         if reply:
             conn.send(reply)
             raise xmpp.NodeProcessed
@@ -180,6 +191,88 @@ class TNVirtualMachineAgent(TNArchipelPlugin):
         except Exception as ex:
             reply = build_error_iq(self, ex, iq, ARCHIPEL_ERROR_CODE_VIRTUALMACHINEAGENT_EXEC)
         return reply
+
+    def iq_provisioning(self, iq):
+        """ process the provisioning requests.
+
+        the get requests are about to fetch available configurations.
+        the set requests are about to set the configurations.
+
+        also we need to store values before sending the set requests to
+        guestagent which ables us to have value of configuration filled
+        when we're sending result of get response to client.
+
+        @type id: xmpp.Protocol.Iq
+        @param id: received iq
+        @rtype: xmpp.Protocol
+        @return: the stanza that should be sent or None if we've not processes the stanza
+
+        """
+        guestJID = xmpp.JID(self.entity.uuid+'-agent@'+self.entity.jid.getDomain()+'/guestagent')
+        iqType = iq.getType()
+        if iqType == "get":
+            # we should route the request to guestagent and when we got
+            # the response back, add stored values (if any)
+            request = xmpp.protocol.Iq(typ="get", to=guestJID)
+            request.setQueryPayload(iq.getQueryPayload())
+        elif iqType == "set":
+            # save values in db
+            for arguments in iq.getTag('query').getTag('archipel').getTags('arguments'):
+                if not arguments.getAttr('uuid'):
+                    continue
+                theBase = arguments.getAttr('name') + '_' + arguments.getAttr('uuid')
+                thePos = 0
+                for argument in arguments.getTags('argument'):
+                    theID = theBase + '_' + str(thePos)
+                    theValue = argument.getData()
+                    self.saveArgumentValue(theID, theValue)
+                    thePos = thePos + 1
+            # route the request to guestagent
+            request = xmpp.protocol.Iq(typ="set", to=guestJID)
+            request.setQueryPayload(iq.getQueryPayload())
+        elif str(iq.getFrom()).lower() == str(guestJID).lower():
+            # it's result/error of get/set request that we've proxied, we should
+            # send it back to jid that requested it at first place
+            try:
+                request = xmpp.protocol.Iq(typ=iq.getType(), to=self.requestsPair[iq.getID()])
+                request.setPayload(iq.getPayload())
+                for config in request.getTag('query').getTag('archipel').getTags('config'):
+                    theBase = config.getAttr('name') + '_' + config.getTag('identifier').getData()
+                    thePos = 0
+                    for argument in config.getTag('arguments').getChildren():
+                        theID = theBase + '_' + str(thePos)
+                        theValue = self.getArgumentValue(theID)
+                        if theValue == None:
+                            continue
+                        argumentType = argument.getName()
+                        if argumentType == "string":
+                            argument.setAttr('value', theValue)
+                        elif argumentType == "select":
+                            for option in argument.getTags('option'):
+                                if option.getData() == theValue:
+                                    option.setAttr('selected', 'yes')
+                                    break
+                        thePos = thePos + 1
+                request.setID(re.sub('^[0-9]+vmga-', '', iq.getID()))
+                request.setQueryNS(ARCHIPEL_NS_GUEST_CONTROL)
+                del self.requestsPair[iq.getID()]
+                # we've just removed the vmga part from id and cleaned the
+                # self.requestsPair so lets return the stanza here to avoid
+                # set of id/requestsPair again
+                return request
+            except:
+                # just log it, we can't do anything about it.
+                self.entity.log.info('couldn\'t process: '+str(iq))
+                return None
+        else:
+            return None
+        request.setQueryNS(ARCHIPEL_NS_GUEST_CONTROL)
+        ID = self.idSequence
+        self.idSequence += 1
+        ID = str(ID)+'vmga-'+iq.getID()
+        request.setID(ID)
+        self.requestsPair[ID] = str(iq.getFrom())
+        return request
 
     def process_message(self, conn, msg):
         """
@@ -209,3 +302,34 @@ class TNVirtualMachineAgent(TNArchipelPlugin):
         executor = msg.getFrom()
         return self.execute(command, executor)
 
+    def saveArgumentValue(self, theID, theValue):
+        """
+        save value of argument into db
+
+        @type theID: string
+        @param theID: the identifier of argument which is combination of
+        uuid_name_pos
+        @type theValue: string
+        @param theValue: the user input for value
+        """
+        # lets hash the id so we can make sure it's always 32 characters
+        theHash = hashlib.md5(theID).hexdigest()
+        self.cursor.execute("insert or ignore into provisioning (id, value) values (?, ?)", (theHash, theValue))
+        self.cursor.execute("update provisioning set value=? where id=?", (theValue, theHash))
+        self.database.commit()
+
+    def getArgumentValue(self, theID):
+        """
+        get value of argument that we've stored
+
+        @type theID: string
+        @param theID: the identifier of argument which is combination of
+        uuid_name_pos
+        """
+        # lets hash the id so we can make sure it's always 32 characters
+        theHash = hashlib.md5(theID).hexdigest()
+        self.cursor.execute("select id, value from provisioning where id=? limit 1", (theHash,))
+        for row in self.cursor:
+            tmp, value = row
+            return value
+        return None
