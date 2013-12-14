@@ -2,8 +2,6 @@
 #
 # archipelGuest.py
 #
-# Copyright (C) 2010 Antoine Mercadal <antoine.mercadal@inframonde.eu>
-# Copyright, 2011 - Franck Villaume <franck.villaume@trivialdev.com>
 # Copyright (C) 2012 Parspooyesh - Behrooz Shabani <everplays@gmail.com>
 # This file is part of ArchipelProject
 # http://archipelproject.org
@@ -24,11 +22,16 @@
 """
 Contains L{TNArchipelGuest}, singleton entity for guest os
 """
+import glob
 import xmpp
 import subprocess
 import os
+import re
 from threading import Thread
+from lxml import etree
+from StringIO import StringIO
 
+from xmpp.simplexml import XML2Node
 from archipelcore.archipelEntity import TNArchipelEntity
 from archipelcore.archipelHookableEntity import TNHookableEntity
 from archipelcore.utils import build_error_iq
@@ -80,15 +83,17 @@ class TNArchipelGuest(TNArchipelEntity, TNHookableEntity):
         TNArchipelEntity.unregister_handlers(self)
         self.xmppclient.UnregisterHandler('iq', self.process_iq, ns=ARCHIPEL_NS_GUEST_CONTROL)
 
-    def execute_command(self, command):
+    def execute_command(self, command, result=True):
         """
         executes given command using subprocess module
         @type command: String
         @param command: command to be executed
         """
-        p = subprocess.Popen(command, stdout=subprocess.PIPE)
+        p = subprocess.Popen([command], shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if not result:
+            return ''
         response, stderr = p.communicate()
-        return response
+        return str(response)+"\n"+str(stderr)
 
     ### XMPP Processing
 
@@ -105,8 +110,14 @@ class TNArchipelGuest(TNArchipelEntity, TNHookableEntity):
         reply = None
         action = self.check_acp(conn, iq)
 
+        # just run commands received from jid of vm
+        if iq.getFrom().getStripped().lower() <> self.jid.getStripped().replace("-agent", '').lower():
+            return
+
         if action == "exec":
             reply = self.iq_exec(iq)
+        if action == "provisioning":
+            reply = self.iq_provisioning(iq)
         if reply:
             conn.send(reply)
             raise xmpp.protocol.NodeProcessed
@@ -117,22 +128,21 @@ class TNArchipelGuest(TNArchipelEntity, TNHookableEntity):
         creates a result containing the stdout of command
         @type iq: xmpp.Protocol.Iq
         @param iq: received Iq stanza
+        @rtype xmpp.Protocol.Iq
+        @return the reply of stanza
         """
         self.log.info('processing: '+str(iq))
-        response = 'direct execution is not allowed'
-        # just run commands received from jid of vm
-        if iq.getFrom().getStripped().lower() == self.jid.getStripped().replace("-agent", '').lower():
-            command = iq.getTag("query").getTag("archipel").getData()
-            # if we're in safe mode just run scripts that we've provided along archipel
-            if self.configuration.getboolean("GUEST", "safemode"):
-                command = os.path.join(self.configuration.get("DEFAULT", "archipel_folder_lib"), "bin", command)
-                self.log.info("going to execute: "+command)
-                if not os.path.exists(command):
-                    response = "there's no such command available"
-                else:
-                    response = self.execute_command(command)
+        command = iq.getTag("query").getTag("archipel").getData()
+        # if we're in safe mode just run scripts that we've provided along archipel
+        if self.configuration.getboolean("GUEST", "safemode"):
+            command = os.path.join(self.configuration.get("DEFAULT", "archipel_folder_lib"), "bin", command)
+            self.log.info("going to execute: "+command)
+            if not os.path.exists(command):
+                response = "there's no such command available"
             else:
                 response = self.execute_command(command)
+        else:
+            response = self.execute_command(command)
         result = iq.buildReply('result')
         query = result.getTag("query")
         archipel = query.addChild("archipel", attrs={
@@ -142,3 +152,60 @@ class TNArchipelGuest(TNArchipelEntity, TNHookableEntity):
         self.log.info('responsing: '+str(result))
         return result
 
+    def iq_provisioning(self, iq):
+        """ response to provisioning request.
+        if stanza is a get then return available provisionings
+        if stanza is a set then run provisioning scripts with given values
+        @type iq: xmpp.Protocol.Iq
+        @param iq: received Iq stanza
+        @rtype xmpp.Protocol.Iq
+        @return the reply of stanza
+        """
+        if iq.getType() == "get":
+            result = iq.buildReply('result')
+            archipelTag = xmpp.simplexml.Node('archipel', attrs={'action': 'provisioning'}, payload=self.get_provisioning_config())
+            result.setQueryPayload([archipelTag])
+        elif iq.getType() == "set":
+            result = iq.buildReply("result")
+            archipelTag = xmpp.simplexml.Node('archipel', attrs={'action': 'provisioning'})
+            result.setQueryPayload([archipelTag])
+            try:
+                self.run_provisionings(iq)
+            except Exception as e:
+                result = build_error_iq(self, e, iq, ARCHIPEL_NS_GUEST_CONTROL)
+        return result
+
+    def get_provisioning_config(self):
+        """ create a list of valid configurations ready to be used as payload. """
+        payload = []
+        # create xsd to be able to check validity of xml files
+        xsd_string = open(os.path.join(os.path.dirname(__file__), "configuration.xsd")).read()
+        xsd_doc = etree.parse(StringIO(xsd_string))
+        xsd = etree.XMLSchema(xsd_doc)
+        config_dir = self.configuration.get("GUEST", "config_directory")
+        for xmlPath in glob.glob("%s/*.xml" % config_dir):
+            name = re.search(".*/(.*)\\.xml$", xmlPath).group(1)
+            xml_string = open(xmlPath).read()
+            xml_doc = etree.parse(StringIO(xml_string))
+            if not xsd.validate(xml_doc):
+                continue
+            index = len(payload)
+            payload.append(XML2Node(xml_string))
+            payload[index].setAttr('name', name)
+        return payload
+
+    def run_provisionings(self, iq):
+        """ run provisionings based on received iq
+        @type iq: xmpp.Protocol.Iq
+        @param iq: set provisionings stanza
+        """
+        for arguments in iq.getTag("query").getTag("archipel").getTags("arguments"):
+            name = arguments.getAttr('name')
+            xml_path = os.path.join(self.configuration.get("GUEST", "config_directory"), "%s.xml" % name)
+            xml_doc = etree.parse(xml_path)
+            command = xml_doc.xpath("/x:config/x:command", namespaces={'x': 'http://xamin.ir/provisioning'})[0].text
+            arg_values = []
+            for argument in arguments.getTags('argument'):
+                arg_values.append(argument.getData())
+            command = command % tuple(arg_values)
+            self.execute_command(command, False)

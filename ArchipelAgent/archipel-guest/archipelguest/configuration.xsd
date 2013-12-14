@@ -1,0 +1,57 @@
+<?xml version="1.0"?>
+<xs:schema version="1.0"
+    targetNamespace="http://xamin.ir/provisioning"
+    xmlns="http://xamin.ir/provisioning"
+    xmlns:xs="http://www.w3.org/2001/XMLSchema"
+    elementFormDefault="qualified">
+
+    <xs:simpleType name="identifier">
+        <xs:restriction base="xs:string">
+            <xs:pattern value="[a-zA-Z0-9-]+"/>
+        </xs:restriction>
+    </xs:simpleType>
+
+    <xs:simpleType name="command">
+        <xs:restriction base="xs:string">
+            <xs:pattern value=".+"/>
+        </xs:restriction>
+    </xs:simpleType>
+
+    <xs:complexType name="option">
+        <xs:simpleContent>
+            <xs:extension base="xs:string">
+                <xs:attribute name="label" type="xs:string" use="required" />
+            </xs:extension>
+        </xs:simpleContent>
+    </xs:complexType>
+
+    <xs:complexType name="select-argument">
+        <xs:sequence>
+            <xs:element name="option" type="option" maxOccurs="unbounded" />
+        </xs:sequence>
+        <xs:attribute name="name" type="xs:string" use="required" />
+    </xs:complexType>
+
+    <xs:complexType name="string-argument">
+        <xs:attribute name="name" type="xs:string" use="required" />
+        <xs:attribute name="pattern" type="xs:string" use="required" />
+    </xs:complexType>
+
+    <xs:complexType name="arguments">
+        <xs:choice maxOccurs="unbounded">
+            <xs:element name="select" type="select-argument" />
+            <xs:element name="string" type="string-argument" />
+        </xs:choice>
+    </xs:complexType>
+
+    <xs:element name="config" type="config" />
+    <xs:complexType name="config">
+        <xs:sequence>
+            <xs:element name="identifier" type="identifier" minOccurs="1" maxOccurs="1" />
+            <xs:element name="do-not-store" minOccurs="0" maxOccurs="1" />
+            <xs:element name="command" type="command" minOccurs="1" maxOccurs="1" />
+            <xs:element name="arguments" type="arguments" minOccurs="1" maxOccurs="1" />
+        </xs:sequence>
+    </xs:complexType>
+
+</xs:schema>

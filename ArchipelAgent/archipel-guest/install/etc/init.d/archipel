@@ -18,7 +18,7 @@
 # Required-Start: $network libvirtd
 # Required-Stop: $network
 # Should-Stop: libvirtd
-# Default-Start: 3 4 5
+# Default-Start: 2 3 4 5
 # Default-Stop: 0 1 6
 # Short-Description:  daemon for archipel orchestrator suite
 # Description: This is a daemon for managing hypervisor

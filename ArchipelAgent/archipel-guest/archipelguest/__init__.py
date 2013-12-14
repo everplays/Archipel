@@ -2,8 +2,7 @@
 #
 # __init__.py
 #
-# Copyright (C) 2010 Antoine Mercadal <antoine.mercadal@inframonde.eu>
-# Copyright (C) 2012 Behrooz Shabani <everplays@gmail.com>
+# Copyright (C) 2012 Parspooyesh - Behrooz Shabani <everplays@gmail.com>
 # This file is part of ArchipelProject
 # http://archipelproject.org
 #

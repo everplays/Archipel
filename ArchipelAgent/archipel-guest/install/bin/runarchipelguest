@@ -153,7 +153,9 @@ def main(config):
         password = hashlib.md5(str(moduuid.uuid1())).hexdigest()
         passwordFile.write(password)
         passwordFile.close()
-        password = hashlib.md5(uuid).hexdigest()
+        passwordFile = open('/etc/archipel/archipel.passwd')
+        password = passwordFile.readline().strip()
+        passwordFile.close()
         try:
             os.fchmod('/etc/archipel/archipel.passwd', 0400)
         except:
