@@ -1,0 +1,118 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple Computer//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+    <dict>
+        <!--
+            the bundle identifier. It MUST BE UNIQUE
+        -->
+        <key>CPBundleIdentifier</key>
+        <string>ir.xamin.provisioning</string>
+
+        <!--
+            The default locale to use
+        -->
+        <key>CPBundleLocale</key>
+        <string>en</string>
+
+        <!--
+            Version of this plist file. Must be 1.0
+        -->
+        <key>CPBundleInfoDictionaryVersion</key>
+        <string>1.0</string>
+
+        <!--
+            The package type. Must be 280N
+        -->
+        <key>CPBundlePackageType</key>
+        <string>280N</string>
+
+        <!--
+            The version of CPBundle. Must be 1.0
+        -->
+        <key>CPBundleVersion</key>
+        <string>1.0</string>
+
+        <!--
+            The name of the bundle
+        -->
+        <key>CPBundleName</key>
+        <string>XaminProvisioning</string>
+
+        <!--
+            The main class of the module.
+        -->
+        <key>CPPrincipalClass</key>
+        <string>TNXaminProvisioningModuleController</string>
+
+        <!--
+            The plugin display name. This will be display as name of
+            the module in the GUI
+        -->
+        <key>PluginDisplayName</key>
+        <dict>
+            <key>en</key>
+            <string>Provisioning</string>
+        </dict>
+
+        <!--
+            The desired tabulation index. If two module have the same tabIndex,
+            they are displayed in the load order.
+        -->
+        <key>TabIndex</key>
+        <integer>4</integer>
+
+        <!--
+            The type of the module. It can be
+             - tab : for tabbed modules
+             - toolbar : for general module displayed in toolbar
+        -->
+        <key>InsertionType</key>
+        <string>tab</string>
+
+        <!--
+            This defines on which entity type the module have to been displayed. It
+            can be the following :
+             - virtualmachine
+             - hypervisor
+             - group
+             - user
+        -->
+        <key>SupportedEntityTypes</key>
+        <array>
+            <string>virtualmachine</string>
+        </array>
+
+        <!--
+            If set to 0, the module will not register menu item
+        -->
+        <key>UseModuleMenu</key>
+		<integer>0</integer>
+
+        <!--
+            If set to 1, the module will expand with the window. Otherwise,
+            you are responsible for the height of the module
+        -->
+        <key>FullscreenModule</key>
+        <integer>1</integer>
+
+
+        <!--
+            This is the minimal required set of permissions you need
+            to be able to display the module.
+        -->
+        <!--
+        <key>MandatoryPermissions</key>
+        <array>
+            <string>perm_name_A</string>
+            <string>perm_name_B</string>
+        </array>
+        -->
+
+        <!--
+            This indicate to the module loader which CIB to load.
+            It must be the fileName without the .cib extension
+        -->
+        <key>CibName</key>
+        <string>XaminProvisioning</string>
+    </dict>
+</plist>
